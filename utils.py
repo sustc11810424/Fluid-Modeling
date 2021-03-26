@@ -141,3 +141,37 @@ def interp_scalar_field(tri: Triangulation, field:np.ndarray, size=(512, 512), x
     XX, YY = np.meshgrid(x,  y)
     interp = LinearTriInterpolator(tri, field)
     return interp(XX, -YY)
+
+def generate_training_data(airfoil_dir, output_dir, config_file='solve.cfg'):
+    
+    def modify_config(Mach, AoA):
+        with open(config_file, 'r') as f:
+            lines = f.readlines()
+        
+        with open(config_file, 'w') as f:
+            new_lines = []
+            for line in lines:
+                if line.startswith('MACH_NUMBER'):
+                    line = f'MACH_NUMBER= {Mach}\n'
+                if line.startswith('AOA'):
+                    line = f'AOA= {AoA}\n'
+                new_lines.append(line)
+            f.writelines(new_lines)
+
+    import os, shutil
+    os.makedirs(output_dir, exist_ok=True)
+    for file_name in os.listdir(airfoil_dir):
+        name = file_name.split('.')[0]
+        save_path = os.path.join(output_dir, name)
+        os.makedirs(save_path, exist_ok=True)
+        profile = read_dat(os.path.join(airfoil_dir, file_name))
+        generate_mesh(profile, 'mesh.su2')
+        for Mach in np.linspace(0.2, 0.5, 5):
+            for AoA in np.linspace(0, 10, 11):
+                modify_config(Mach, AoA)
+                os.system(f'SU2_CFD {config_file}')
+                
+                shutil.move('solution.csv', os.path.join(save_path, f'solution_{Mach}_{AoA}.csv'))
+                shutil.move('flow.szplt', os.path.join(save_path, f'flow_{Mach}_{AoA}.szplt'))
+        os.rename('mesh.su2' , os.path.join(save_path, 'mesh.su2'))
+    os.remove('history.dat')

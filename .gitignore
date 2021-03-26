@@ -129,5 +129,7 @@ dmypy.json
 .pyre/
 
 /airfoils/*
+!airfoils/
 /data/*
+!data/
 lightning_logs/
