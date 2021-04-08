@@ -12,7 +12,16 @@ from utils import interp_scalar_field, get_mesh_graph
 torch.set_default_tensor_type(torch.DoubleTensor)
 
 # fields we care
-Fields = ['Density', 'Momentum_x', 'Momentum_y', 'Energy', 'Pressure', 'Temperature', 'Mach', 'Pressure_Coefficient']
+Fields = [
+    'Density', 
+    'Momentum_x', 
+    'Momentum_y', 
+    'Energy', 
+    'Pressure', 
+    'Temperature', 
+    # 'Mach', 
+    # 'Pressure_Coefficient'
+]
 
 def interp_data(data_dir='./data', size=(512, 512), xlim=(-0.5, 1.5), ylim=(-1, 1)):
     """
@@ -44,8 +53,12 @@ class UnstructuredMeshDataset(GeoDataset):
         super(UnstructuredMeshDataset, self).__init__(None, None, None)
         self.file_list = file_list
         self.mesh_dict = mesh_dict
-        self.max = statistics['max']
-        self.min = statistics['min']
+        self.max = statistics['max'].to_numpy()
+        self.min = statistics['min'].to_numpy()
+        self.max_mag = np.abs(np.stack([self.max, self.min])).max(axis=0)
+
+        print(self.max_mag)
+        assert len(self.max_mag) == len(self.max)
 
     def __len__(self):
         return len(self.file_list)
@@ -58,12 +71,17 @@ class UnstructuredMeshDataset(GeoDataset):
         data = pd.read_csv(file_path)[Fields] # discard the "ID" column
 
         # TODO add more transform
-        data = data / self.max # normalize to (-1., 1.)
+        # data = data / self.max_mag # normalize to (-1., 1.)
+        data = (data - self.min) / (self.max - self.min)
         nodes, edge_index, elems, marker_dict = self.mesh_dict[airfoil]
+        node_type = torch.zeros(len(nodes), 1)
+        for i, marker in enumerate(marker_dict.keys()):
+            for item in marker_dict[marker]:
+                node_type[item] = i + 1
 
         edge_index = to_undirected(edge_index)
         free_stream = Mach * torch.ones(nodes.size(0), 2) * torch.tensor([np.cos(AoA* np.pi / 180.), np.sin(AoA* np.pi / 180.)])
-        x = torch.hstack((nodes, free_stream))
+        x = torch.hstack((nodes, node_type, free_stream))
         flow_field = torch.from_numpy(data.to_numpy())
         
         return Data(x=x, edge_index=edge_index), Data(x=flow_field, edge_index=edge_index), airfoil
@@ -77,9 +95,12 @@ class RegularGridDataset(Dataset):
         self.file_list = file_list
         self.mesh_dict = mesh_dict
         # TODO
-        self.max = statistics['max'].to_numpy().reshape(-1, 1, 1)
-        self.min = statistics['min'].to_numpy().reshape(-1, 1, 1)
-    
+        self.max = statistics['max'].to_numpy()
+        self.min = statistics['min'].to_numpy()
+        self.max_mag = np.abs(np.stack([self.max, self.min])).max(axis=0).reshape(-1, 1, 1)
+        
+        assert len(self.max_mag) == len(self.max)
+
     def __len__(self):
         return len(self.file_list)
     
@@ -95,7 +116,7 @@ class RegularGridDataset(Dataset):
         fields[:, mask==0] = 0.0 # TODO maybe a better way?
         
         # TODO add more appropriate transform
-        fields = fields / self.max # normalize to (-1., 1.)
+        fields = fields / self.max_mag # normalize to (-1., 1.)
 
         free_stream = Mach * torch.ones(2, mask.shape[0], mask.shape[1]) * torch.tensor([np.cos(AoA* np.pi / 180.), np.sin(AoA* np.pi / 180.)]).reshape((2, 1, 1))
         x = torch.cat((mask[None], free_stream*mask[None]))
@@ -125,8 +146,12 @@ class DataModule(pl.LightningDataModule):
         self.statistics = statistics
 
     def prepare_data(self):
-        data_list = []
-        mesh_dict = {}
+        # TODO: generate data here
+        pass
+
+    def read_data(self):
+        data_list = [] # file names
+        mesh_dict = {} # airfoil: mesh
         
         for airfoil in os.listdir(self.data_dir):
             path = os.path.join(self.data_dir, airfoil)
@@ -135,30 +160,38 @@ class DataModule(pl.LightningDataModule):
                     data_list.append((airfoil, os.path.join(path, f)))
                 elif f.endswith('.su2'):
                     mesh_dict[airfoil] = get_mesh_graph(os.path.join(path, f))
-        train_len = int(len(data_list)*0.75) 
-        self.mesh_dict = mesh_dict
+        return data_list, mesh_dict
+    
+    def gather_stats(self):
+        df = pd.read_csv(self.data_list[0][1].replace('.npy', '.csv'))
+        stats = df.describe().T[['count', 'mean', 'std', 'min', 'max']]
+        t = tqdm(self.data_list[1:], desc='collecting statistics')
+        for _, file_name in t:
+            df = pd.read_csv(file_name.replace('.npy', '.csv'))
+            desc = df.describe().T[['count', 'mean', 'std', 'min', 'max']]
+            stats['max'] = pd.concat((stats['max'], desc['max']), axis=1).max(axis=1)
+            stats['min'] = pd.concat((stats['min'], desc['min']), axis=1).min(axis=1)
+            stats['mean'] = stats['mean'] * stats['count'] / (stats['count'] + desc['count']) + desc['mean'] / (stats['count'] + desc['count'])
+            stats['count'] = stats['count'] + desc['count']
+            # TODO: std?
+        t.close()
 
-        # TODO replace this with a better one!
+        return stats
+
+    def setup(self, stage=None):
+        self.data_list, self.mesh_dict = self.read_data()
+        
+        # gather statistics if necessary
         if self.statistics==None:
-            print('collecting global statistics')
-            df = data_list[0][1].replace('.npy', '.csv')
-            max = pd.read_csv(df).max()
-            min = pd.read_csv(df).min()
-            for _, file_name in data_list[1:]:
-                df = pd.read_csv(file_name.replace('.npy', '.csv'))
-                max = pd.concat((max, df), axis=1).max(axis=1)
-                min = pd.concat((min, df), axis=1).min(axis=1)
-            
-            self.statistics = {
-                'max': max[Fields],
-                'min': min[Fields],
-            }
-        
+            self.statistics = self.gather_stats()
         print(self.statistics)
-        
-        self.train_set, self.test_set = torch.utils.data.random_split(self.Dataset(data_list, mesh_dict, self.statistics), [train_len, len(data_list)-train_len])
 
-    # def setup(self, )
+        # data splitting
+        train_len = int(len(self.data_list)*0.75) 
+        self.train_set, self.test_set = torch.utils.data.random_split(
+            dataset=self.Dataset(self.data_list, self.mesh_dict, self.statistics), 
+            lengths=[train_len, len(self.data_list)-train_len]
+        )
 
     def train_dataloader(self):
         return self.DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True)
