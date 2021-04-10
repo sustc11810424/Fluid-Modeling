@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import os
 from utils import interp_scalar_field, get_mesh_graph
+from torchvision.transforms import Compose, Normalize
 torch.set_default_tensor_type(torch.DoubleTensor)
 
 # fields we care
@@ -23,7 +24,7 @@ Fields = [
     # 'Pressure_Coefficient'
 ]
 
-def interp_data(data_dir='./data', size=(512, 512), xlim=(-0.5, 1.5), ylim=(-1, 1)):
+def interp_data(data_dir='./data', size=(512, 512), xlim=(-0.5, 1.5), ylim=(-1, 1), Fields=Fields):
     """
     Interpolate fields on irregular grids to ndarrays of shape (1+#fields, size[0], size[1]) and save as .npy files.
     """
@@ -57,7 +58,6 @@ class UnstructuredMeshDataset(GeoDataset):
         self.min = statistics['min'].to_numpy()
         self.max_mag = np.abs(np.stack([self.max, self.min])).max(axis=0)
 
-        print(self.max_mag)
         assert len(self.max_mag) == len(self.max)
 
     def __len__(self):
@@ -73,6 +73,7 @@ class UnstructuredMeshDataset(GeoDataset):
         # TODO add more transform
         # data = data / self.max_mag # normalize to (-1., 1.)
         data = (data - self.min) / (self.max - self.min)
+
         nodes, edge_index, elems, marker_dict = self.mesh_dict[airfoil]
         node_type = torch.zeros(len(nodes), 1)
         for i, marker in enumerate(marker_dict.keys()):
@@ -90,16 +91,16 @@ class RegularGridDataset(Dataset):
     """
 
     """
-    def __init__(self, file_list, mesh_dict=None, statistics=None):
+    def __init__(self, file_list, mesh_dict=None, stats=None):
         super(RegularGridDataset, self).__init__()
         self.file_list = file_list
         self.mesh_dict = mesh_dict
         # TODO
-        self.max = statistics['max'].to_numpy()
-        self.min = statistics['min'].to_numpy()
-        self.max_mag = np.abs(np.stack([self.max, self.min])).max(axis=0).reshape(-1, 1, 1)
-        
-        assert len(self.max_mag) == len(self.max)
+        self.stats = stats
+        self.transforms = Compose([
+            Normalize(mean=stats['mean'], std=stats['std'])
+        ])
+        # self.max_mag = np.abs(np.stack([self.max, self.min])).max(axis=0).reshape(-1, 1, 1)
 
     def __len__(self):
         return len(self.file_list)
@@ -113,13 +114,14 @@ class RegularGridDataset(Dataset):
         data = np.load(file_path, allow_pickle=True) # discard the "ID" column
         mask = torch.tensor(data[0])
         fields = torch.tensor(data[1:])
-        fields[:, mask==0] = 0.0 # TODO maybe a better way?
         
-        # TODO add more appropriate transform
-        fields = fields / self.max_mag # normalize to (-1., 1.)
+        if self.transforms:
+            fields = self.transforms(fields)
+        fields[:, mask==0] = 0.0 # TODO maybe a better way?
 
         free_stream = Mach * torch.ones(2, mask.shape[0], mask.shape[1]) * torch.tensor([np.cos(AoA* np.pi / 180.), np.sin(AoA* np.pi / 180.)]).reshape((2, 1, 1))
-        x = torch.cat((mask[None], free_stream*mask[None]))
+        pressure = torch.ones(1, mask.shape[0], mask.shape[1])
+        x = torch.cat((mask[None], free_stream*mask[None], pressure*mask[None]))
         
         return x, fields, airfoil
 
@@ -136,7 +138,7 @@ Data_dataset = {
 }
 
 class DataModule(pl.LightningDataModule):
-    def __init__(self, data_dir='./data', discretization='unstructured', batch_size=32, statistics=None):
+    def __init__(self, data_dir='./data', discretization='unstructured', batch_size=32, statistics=None, interp=None, Fields=Fields):
         super().__init__()
         assert discretization in {'unstructured', 'structured', 'regular'}
         self.postfix = Data_postfix[discretization]
@@ -144,9 +146,19 @@ class DataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.data_dir = data_dir
         self.statistics = statistics
+        self.interp = interp
+        self.Fields = Fields
 
     def prepare_data(self):
         # TODO: generate data here
+
+        # TODO: add more options
+        if self.interp is not None:
+            interp_data(
+                data_dir=self.data_dir,
+                size=(128,  128),
+                Fields=self.Fields,
+            )
         pass
 
     def read_data(self):
@@ -173,7 +185,7 @@ class DataModule(pl.LightningDataModule):
             stats['min'] = pd.concat((stats['min'], desc['min']), axis=1).min(axis=1)
             stats['mean'] = stats['mean'] * stats['count'] / (stats['count'] + desc['count']) + desc['mean'] / (stats['count'] + desc['count'])
             stats['count'] = stats['count'] + desc['count']
-            # TODO: std?
+            stats['std'] = np.sqrt(((stats['std']**2)*stats['count'] + (desc['std']**2)*desc['count']) / (stats['count'] + desc['count']))
         t.close()
 
         return stats
@@ -182,8 +194,13 @@ class DataModule(pl.LightningDataModule):
         self.data_list, self.mesh_dict = self.read_data()
         
         # gather statistics if necessary
-        if self.statistics==None:
+        if self.statistics is None:
             self.statistics = self.gather_stats()
+            self.statistics.to_csv('stats.csv')
+        else:
+            print('use existing stats')
+
+        self.statistics = self.statistics.loc[self.Fields]
         print(self.statistics)
 
         # data splitting

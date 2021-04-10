@@ -18,21 +18,57 @@ class AbstractModel(nn.Module):
         super(CNNModel, self).__init__()
         pass
 
+class ResNeXt(nn.Module):
+    def __init__(self, dim, cardinality):
+        super(ResNeXt, self).__init__()
+        D = 4
+        self.layers = nn.Sequential(
+            nn.Conv2d(dim, D*cardinality, 1),
+            nn.LeakyReLU(),
+            nn.Conv2d(D*cardinality, D*cardinality, 3, padding=1, groups=cardinality),
+            nn.LeakyReLU(),
+            nn.Conv2d(D*cardinality, dim, 1),
+            nn.LeakyReLU(),
+        )
+    
+    def forward(self, x):
+        return x + self.layers(x)
+
 class ExampleCNN(nn.Module):
     def __init__(self, in_dim: int, out_dim: int):
         super(ExampleCNN, self).__init__()
-        self.layers = nn.ModuleList([nn.Conv2d(in_dim, 8, 5, padding=2), nn.LeakyReLU()])
-        for i in range(2): 
-            self.layers.append(nn.Conv2d(8, 8, 3, padding=1))
-            self.layers.append(nn.LeakyReLU())
-        self.layers.append(nn.Conv2d(8, out_dim, 3, padding=1))
+        self.encode = nn.Sequential(
+            nn.Conv2d(in_channels=in_dim, out_channels=16, kernel_size=8, padding=3, padding_mode='replicate'),
+            nn.LeakyReLU(),
+            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=6, padding=2, padding_mode='replicate'),
+            nn.LeakyReLU(),
+            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=6, padding=2, padding_mode='replicate'),
+            nn.LeakyReLU(),
+            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=6, padding=2, padding_mode='replicate'),
+            nn.LeakyReLU(),
+        ) # 16 * downsample
+        self.hidden = nn.Sequential(
+            ResNeXt(dim=16, cardinality=8),
+            ResNeXt(dim=16, cardinality=8),
+            ResNeXt(dim=16, cardinality=8),
+        ) # at least 32*32
+        self.decode = nn.Sequential(
+            nn.ConvTranspose2d(16, 16, kernel_size=6, padding=2),
+            nn.LeakyReLU(),
+            nn.ConvTranspose2d(16, 16, kernel_size=6, padding=2),
+            nn.LeakyReLU(),
+            nn.ConvTranspose2d(16, 16, kernel_size=6, padding=2),
+            nn.LeakyReLU(),
+            nn.ConvTranspose2d(16, 16, kernel_size=8, padding=3),
+            nn.Conv2d(16, out_dim, 1),
+        )
         
     def forward(self, x: torch.Tensor):
         if len(x.size())<4: x.unsqueeze_(0)
-        for layer in self.layers:
-            x = layer(x)
+        x = self.encode(x)
+        x = self.hidden(x)
+        x = self.decode(x)
         return x
-
 
 class SELayer(nn.Module):
     def __init__(self, channel, reduction=1):
@@ -183,20 +219,35 @@ class FeedForward(pl.LightningModule):
 
         # TODO a better logger
         self.log('training_loss', loss)
-        if batch_idx==0: 
-            x, y, af = self.trainer.datamodule.get_example()
-            x = x.to(self.device)
-            with torch.no_grad():
-                if isinstance(x, Data):
-                    nodes, edges, elems, marker_dict = self.trainer.datamodule.mesh_dict[af]
-                    figure = plot_scalar_field(torch.stack((self.model(x).detach().cpu().T, y.x.T)), X=nodes.T, tri=elems[0]) 
-                else:
-                    figure = plot_scalar_field(torch.cat((self.model(x).detach().cpu(), y[None])))
-                self.logger.experiment.add_figure(
-                    f'Epoch{self.current_epoch}:', 
-                    figure,
-                )
         return loss
+
+    def on_train_epoch_end(self, outputs):
+        x, y, af = self.trainer.datamodule.get_example()
+        x = x.to(self.device)
+        with torch.no_grad():
+            if isinstance(x, Data):
+                nodes, edges, elems, marker_dict = self.trainer.datamodule.mesh_dict[af]
+                pred = self.model(x).detach().cpu()
+                fields = torch.stack((
+                    pred.T,
+                    y.x.T,
+                    (y.x.T-pred.T).abs()
+                ))
+                figure = plot_scalar_field(fields, X=nodes.T, tri=elems[0]) 
+            else:
+                pred = self.model(x).detach().cpu()
+                fields = torch.cat((
+                    pred,
+                    y[None],
+                    (y[None]-pred).abs()
+                ))
+                figure = plot_scalar_field(fields)
+        # for opt in self.optimizers():
+        #     self.log('learning rate', opt.state_dict()['param_groups'][0]['lr'])
+        self.logger.experiment.add_figure(
+            f'Epoch{self.current_epoch}:', 
+            figure,
+        )
 
     def test_step(self, batch, batch_idx):
         x, y, other = batch
