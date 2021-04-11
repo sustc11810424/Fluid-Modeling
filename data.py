@@ -114,11 +114,12 @@ class RegularGridDataset(Dataset):
         data = np.load(file_path, allow_pickle=True) # discard the "ID" column
         mask = torch.tensor(data[0])
         fields = torch.tensor(data[1:])
-        fields[:, mask==0] = 0.0 # TODO maybe a better way?
+        
 
         if self.transforms:
             fields = self.transforms(fields)
-        
+        fields[:, mask==0] = 0.0 # TODO maybe a better way?
+
         free_stream = Mach * torch.ones(2, mask.shape[0], mask.shape[1]) * torch.tensor([np.cos(AoA* np.pi / 180.), np.sin(AoA* np.pi / 180.)]).reshape((2, 1, 1))
         pressure = torch.ones(1, mask.shape[0], mask.shape[1])
         x = torch.cat((

@@ -24,51 +24,54 @@ class ResNeXt(nn.Module):
         D = 4
         self.layers = nn.Sequential(
             nn.Conv2d(dim, D*cardinality, 1),
-            nn.BatchNorm2d(D*cardinality),
             nn.LeakyReLU(),
             nn.Conv2d(D*cardinality, D*cardinality, 3, padding=1, groups=cardinality),
-            nn.BatchNorm2d(D*cardinality),
             nn.LeakyReLU(),
             nn.Conv2d(D*cardinality, dim, 1),
-            nn.BatchNorm2d(dim),
             nn.LeakyReLU(),
         )
     
     def forward(self, x):
         return x + self.layers(x)
 
+class Upsample(nn.Module):
+    def __init__(self, in_channels, out_channels, groups=1):
+        super(Upsample, self).__init__()
+        self.blocks = nn.Sequential(
+            nn.Conv2d(in_channels, out_channels*4, kernel_size=5, padding=2, padding_mode='replicate', groups=groups) ,
+            nn.PixelShuffle(2),
+            nn.PReLU(out_channels),
+        )
+    def forward(self, x):
+        return self.blocks(x)
+
 class ExampleCNN(nn.Module):
     def __init__(self, in_dim: int, out_dim: int):
         super(ExampleCNN, self).__init__()
         self.encode = nn.Sequential(
-            nn.Conv2d(in_channels=in_dim, out_channels=16, kernel_size=8, padding=3, padding_mode='replicate'),
+            nn.Conv2d(in_channels=in_dim, out_channels=16, kernel_size=8, stride=2, padding=3, padding_mode='replicate'),
             nn.LeakyReLU(),
-            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=6, padding=2, padding_mode='replicate'),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=6, stride=2, padding=2, padding_mode='replicate'),
             nn.LeakyReLU(),
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=6, padding=2, padding_mode='replicate'),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=6, stride=2, padding=2, padding_mode='replicate'),
             nn.LeakyReLU(),
-            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=6, padding=2, padding_mode='replicate'),
-            nn.BatchNorm2d(64),
+            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=6, stride=2, padding=2, padding_mode='replicate'),
             nn.LeakyReLU(),
         ) # 16 * downsample
         self.hidden = nn.Sequential(
-            ResNeXt(dim=64, cardinality=6),
-            ResNeXt(dim=64, cardinality=6),
-            ResNeXt(dim=64, cardinality=6),
+            ResNeXt(dim=64, cardinality=32),
+            ResNeXt(dim=64, cardinality=32),
+            ResNeXt(dim=64, cardinality=32),
         ) # at least 32*32
         self.decode = nn.Sequential(
-            nn.ConvTranspose2d(64, 64, kernel_size=6, padding=2),
-            nn.BatchNorm2d(64),
-            nn.LeakyReLU(),
-            nn.ConvTranspose2d(64, 32, kernel_size=6, padding=2),
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(),
-            nn.ConvTranspose2d(32, 32, kernel_size=6, padding=2),
-            nn.BatchNorm2d(32),
-            nn.LeakyReLU(),
-            nn.ConvTranspose2d(32, 16, kernel_size=8, padding=3),
+            Upsample(64, 64),
+            Upsample(64, 32),
+            Upsample(32, 32),
+            Upsample(32, 16),
+            nn.Conv2d(16, 16, 3, 1, 1, padding_mode='replicate'),
+            nn.PReLU(16),
+            nn.Conv2d(16, 16, 3, 1, 1, padding_mode='replicate'),
+            nn.PReLU(16),
             nn.Conv2d(16, out_dim, 1),
         )
         
@@ -110,72 +113,6 @@ class ResBlock(nn.Module):
         out = self.blocks(x)
         return x + out
 
-class ConvTr(nn.Module):
-    def __init__(self, in_channels, out_channels, type="upsample", activ="lrelu", groups=1):
-        super(ConvTr, self).__init__()
-        if type=="upsample":
-            self.blocks = nn.Sequential(
-                nn.Upsample(scale_factor=2),
-                spectral_norm(nn.Conv2d(in_channels, out_channels, kernel_size=5, padding=2, padding_mode='replicate', groups=groups)) ,
-            )
-        if activ=="lrelu":
-            self.blocks.add_module('activ', nn.LeakyReLU(inplace=True))
-    def forward(self, x):
-        return self.blocks(x)
-
-class Gen(nn.Module):
-    def __init__(self):
-        super(Gen, self).__init__()
-
-        self.conv1 = nn.Sequential(
-            spectral_norm(nn.Conv2d(in_channels=3, out_channels=16, kernel_size=7, padding=3)) ,
-            nn.LeakyReLU(inplace=True),
-            spectral_norm(nn.Conv2d(in_channels=16, out_channels=32, kernel_size=4, stride=2, padding=1, padding_mode='replicate')) ,
-            nn.LeakyReLU(inplace=True),
-        )
-
-        self.conv2 = nn.Sequential(
-            spectral_norm(nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2, padding=1, padding_mode='replicate')) ,
-        )
-
-        self.conv3 = nn.Sequential(
-            spectral_norm(nn.Conv2d(in_channels=64, out_channels=64, kernel_size=4, stride=2, padding=1, padding_mode='replicate')) ,
-            nn.InstanceNorm2d(64),
-        )
-
-        self.res1 = nn.Sequential(
-            ResBlock(64),
-            ResBlock(64),
-            ResBlock(64),
-            nn.InstanceNorm2d(64),
-            nn.LeakyReLU()
-        )
-
-        self.convT1 = ConvTr(64, 64)
-        self.convT2 = ConvTr(2*64, 64)    
-        self.convT3 = ConvTr(64+32, 64) 
-
-        self.final = nn.Sequential(
-            nn.InstanceNorm2d(64),
-            spectral_norm(nn.Conv2d(in_channels=64, out_channels=32,kernel_size=3,stride=1,padding=1, padding_mode='replicate')),
-            nn.LeakyReLU(inplace=True),
-            spectral_norm(nn.Conv2d(in_channels=32, out_channels=16, kernel_size=3,stride=1,padding=1, padding_mode='replicate')),
-            nn.LeakyReLU(inplace=True),
-            spectral_norm(nn.Conv2d(in_channels=16, out_channels=8, kernel_size=1)),
-            nn.Tanh(),
-        )
-    def forward(self, x):
-        if len(x.size())<4: x.unsqueeze_(0)
-        out1 = self.conv1(x)
-        out2 = self.conv2(out1)
-        x = self.conv3(out2)
-        x = self.res1(x)
-        x = self.convT1(x)
-        x = self.convT2(torch.cat([x, out2], dim=1))
-        x = self.convT3(torch.cat([x, out1], dim=1))
-        x = self.final(x)
-        return x
-
 class ExampleGNN(nn.Module):
     def __init__(self, in_dim, out_dim, hidden_dim, num_layers=3):
         super(ExampleGNN, self).__init__()
@@ -216,19 +153,22 @@ class FeedForward(pl.LightningModule):
     def __init__(self, model):
         super(FeedForward, self).__init__()
         self.model = model
+        self.learning_rate = 0.001
 
     def forward(self, x):
         return self.model(x)
     
     def training_step(self, batch, batch_idx):
         x, y, afs = batch
+     
         solution = self.model(x)
         
         loss = F.mse_loss(solution, y.x if isinstance(y, Data) else y)
-
+        
         # TODO a better logger
         self.log('training_loss', loss)
-        return loss
+ 
+        return loss 
 
     def on_train_epoch_end(self, outputs):
         x, y, af = self.trainer.datamodule.get_example()
@@ -251,8 +191,8 @@ class FeedForward(pl.LightningModule):
                     (y[None]-pred).abs()
                 ))
                 figure = plot_scalar_field(fields)
-        # for opt in self.optimizers():
-        #     self.log('learning rate', opt.state_dict()['param_groups'][0]['lr'])
+        
+        self.log('learning rate', self.optimizers().state_dict()['param_groups'][0]['lr'])
         self.logger.experiment.add_figure(
             f'Epoch{self.current_epoch}:', 
             figure,
@@ -266,10 +206,13 @@ class FeedForward(pl.LightningModule):
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters())
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=5)
         return {
             'optimizer': optimizer,
-            'scheduler': scheduler,
+            'lr_scheduler': scheduler,
             'monitor': 'training_loss',
+            'interval': 'step',
+            'frequency': 5,
+            'strict': True
         }
 
