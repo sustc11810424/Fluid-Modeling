@@ -24,10 +24,13 @@ class ResNeXt(nn.Module):
         D = 4
         self.layers = nn.Sequential(
             nn.Conv2d(dim, D*cardinality, 1),
+            nn.BatchNorm2d(D*cardinality),
             nn.LeakyReLU(),
             nn.Conv2d(D*cardinality, D*cardinality, 3, padding=1, groups=cardinality),
+            nn.BatchNorm2d(D*cardinality),
             nn.LeakyReLU(),
             nn.Conv2d(D*cardinality, dim, 1),
+            nn.BatchNorm2d(dim),
             nn.LeakyReLU(),
         )
     
@@ -40,26 +43,32 @@ class ExampleCNN(nn.Module):
         self.encode = nn.Sequential(
             nn.Conv2d(in_channels=in_dim, out_channels=16, kernel_size=8, padding=3, padding_mode='replicate'),
             nn.LeakyReLU(),
-            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=6, padding=2, padding_mode='replicate'),
+            nn.Conv2d(in_channels=16, out_channels=32, kernel_size=6, padding=2, padding_mode='replicate'),
+            nn.BatchNorm2d(32),
             nn.LeakyReLU(),
-            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=6, padding=2, padding_mode='replicate'),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=6, padding=2, padding_mode='replicate'),
+            nn.BatchNorm2d(64),
             nn.LeakyReLU(),
-            nn.Conv2d(in_channels=16, out_channels=16, kernel_size=6, padding=2, padding_mode='replicate'),
+            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=6, padding=2, padding_mode='replicate'),
+            nn.BatchNorm2d(64),
             nn.LeakyReLU(),
         ) # 16 * downsample
         self.hidden = nn.Sequential(
-            ResNeXt(dim=16, cardinality=8),
-            ResNeXt(dim=16, cardinality=8),
-            ResNeXt(dim=16, cardinality=8),
+            ResNeXt(dim=64, cardinality=6),
+            ResNeXt(dim=64, cardinality=6),
+            ResNeXt(dim=64, cardinality=6),
         ) # at least 32*32
         self.decode = nn.Sequential(
-            nn.ConvTranspose2d(16, 16, kernel_size=6, padding=2),
+            nn.ConvTranspose2d(64, 64, kernel_size=6, padding=2),
+            nn.BatchNorm2d(64),
             nn.LeakyReLU(),
-            nn.ConvTranspose2d(16, 16, kernel_size=6, padding=2),
+            nn.ConvTranspose2d(64, 32, kernel_size=6, padding=2),
+            nn.BatchNorm2d(32),
             nn.LeakyReLU(),
-            nn.ConvTranspose2d(16, 16, kernel_size=6, padding=2),
+            nn.ConvTranspose2d(32, 32, kernel_size=6, padding=2),
+            nn.BatchNorm2d(32),
             nn.LeakyReLU(),
-            nn.ConvTranspose2d(16, 16, kernel_size=8, padding=3),
+            nn.ConvTranspose2d(32, 16, kernel_size=8, padding=3),
             nn.Conv2d(16, out_dim, 1),
         )
         
@@ -256,7 +265,7 @@ class FeedForward(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-4)
+        optimizer = torch.optim.Adam(self.parameters())
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
         return {
             'optimizer': optimizer,

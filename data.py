@@ -114,14 +114,18 @@ class RegularGridDataset(Dataset):
         data = np.load(file_path, allow_pickle=True) # discard the "ID" column
         mask = torch.tensor(data[0])
         fields = torch.tensor(data[1:])
-        
-        if self.transforms:
-            fields = self.transforms(fields)
         fields[:, mask==0] = 0.0 # TODO maybe a better way?
 
+        if self.transforms:
+            fields = self.transforms(fields)
+        
         free_stream = Mach * torch.ones(2, mask.shape[0], mask.shape[1]) * torch.tensor([np.cos(AoA* np.pi / 180.), np.sin(AoA* np.pi / 180.)]).reshape((2, 1, 1))
         pressure = torch.ones(1, mask.shape[0], mask.shape[1])
-        x = torch.cat((mask[None], free_stream*mask[None], pressure*mask[None]))
+        x = torch.cat((
+            mask[None], 
+            free_stream*mask[None], 
+            # pressure*mask[None]
+        ))
         
         return x, fields, airfoil
 
@@ -183,7 +187,7 @@ class DataModule(pl.LightningDataModule):
             desc = df.describe().T[['count', 'mean', 'std', 'min', 'max']]
             stats['max'] = pd.concat((stats['max'], desc['max']), axis=1).max(axis=1)
             stats['min'] = pd.concat((stats['min'], desc['min']), axis=1).min(axis=1)
-            stats['mean'] = stats['mean'] * stats['count'] / (stats['count'] + desc['count']) + desc['mean'] / (stats['count'] + desc['count'])
+            stats['mean'] = stats['mean'] * stats['count'] / (stats['count'] + desc['count']) + desc['mean']*desc['count'] / (stats['count'] + desc['count'])
             stats['count'] = stats['count'] + desc['count']
             stats['std'] = np.sqrt(((stats['std']**2)*stats['count'] + (desc['std']**2)*desc['count']) / (stats['count'] + desc['count']))
         t.close()
