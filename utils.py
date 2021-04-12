@@ -1,6 +1,6 @@
 import matplotlib.pyplot as plt
 from matplotlib.tri import Triangulation, LinearTriInterpolator, CubicTriInterpolator
-import gmsh
+# import gmsh
 import numpy as np
 import torch
 
