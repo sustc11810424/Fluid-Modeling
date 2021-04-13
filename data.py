@@ -224,10 +224,10 @@ class DataModule(pl.LightningDataModule):
 
     def val_dataloader(self):
         return self.DataLoader(self.test_set, batch_size=self.batch_size, num_workers=self.num_workers)
-        
+
     def get_example(self):
         idx = np.random.randint(0, len(self.test_set))
         return self.test_set[idx]
 
 if __name__ == '__main__':
-    interp_data(size=(128, 128))
+    interp_data(size=(512, 512))
