@@ -153,6 +153,7 @@ class DataModule(pl.LightningDataModule):
         self.statistics = statistics
         self.interp = interp
         self.Fields = Fields
+        self.num_workers = 4
 
     def prepare_data(self):
         # TODO: generate data here
@@ -216,11 +217,14 @@ class DataModule(pl.LightningDataModule):
         )
 
     def train_dataloader(self):
-        return self.DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True)
+        return self.DataLoader(self.train_set, batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
 
     def test_dataloader(self):
-        return self.DataLoader(self.test_set, batch_size=self.batch_size)
+        return self.DataLoader(self.test_set, batch_size=self.batch_size, num_workers=self.num_workers)
 
+    def val_dataloader(self):
+        return self.DataLoader(self.test_set, batch_size=self.batch_size, num_workers=self.num_workers)
+        
     def get_example(self):
         idx = np.random.randint(0, len(self.test_set))
         return self.test_set[idx]

@@ -17,16 +17,19 @@ class FeedForward(pl.LightningModule):
     
     def training_step(self, batch, batch_idx):
         x, y, afs = batch
-     
         solution = self.model(x)
-        
         loss = F.mse_loss(solution, y.x if isinstance(y, Data) else y)
-        
         # TODO a better logger
         self.log('training_loss', loss)
- 
         return loss 
 
+    def validation_step(self, batch, batch_idx):
+        x, y, afs = batch
+        solution = self.model(x)
+        loss = F.mse_loss(solution, y.x if isinstance(y, Data) else y)
+        # TODO a better logger
+        self.log('val_loss', loss)
+        
     def on_train_epoch_end(self, outputs):
         x, y, af = self.trainer.datamodule.get_example()
         x = x.to(self.device)
