@@ -6,6 +6,8 @@ import numpy as np
 import pytorch_lightning as pl
 from utils import *
 
+from models import config
+
 class FeedForward(pl.LightningModule):
     def __init__(self, model):
         super(FeedForward, self).__init__()
@@ -63,6 +65,49 @@ class FeedForward(pl.LightningModule):
         solution = self.model(x)
         loss = F.mse_loss(solution, y)
         return loss
+
+    def configure_optimizers(self):
+        optimizer = torch.optim.Adam(self.parameters())
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=10, factor=0.5)
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': scheduler,
+            'monitor': 'training_loss',
+            'interval': 'step',
+            'frequency': 5,
+            'strict': True
+        }
+
+class EncoderDecoder(pl.LightningModule):
+    def __init__(self, cfg):
+        super().__init__()
+        self.cfg = cfg
+        self.lr = cfg.get('learning_rate')
+        self.encoder = config.get_model(cfg['model']['encoder'])
+        self.decoder = config.get_model(cfg['model']['decoder'])
+        self.loss_fuc = config.get_loss(cfg)
+
+    def forward(self, x):
+        z = self.encoder(x)
+        y = self.decoder(x)
+        return y
+    
+    def training_step(self, batch, batch_idx):
+        out = self.forward(batch)
+        loss = self.loss_fuc(batch, loss)
+        self.log('training loss', loss)
+        return loss
+
+    def validation_step(self, batch, batch_idx):
+        out = self.forward(batch)
+        loss = self.loss_fuc(batch, loss)
+        self.log('val loss', loss)
+    
+    def test_step(self, batch, batch_idx):
+        pass
+
+    def on_train_epoch_end(self, outputs):
+        pass
 
     def configure_optimizers(self):
         optimizer = torch.optim.Adam(self.parameters())

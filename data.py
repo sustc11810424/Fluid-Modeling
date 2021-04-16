@@ -229,5 +229,3 @@ class DataModule(pl.LightningDataModule):
         idx = np.random.randint(0, len(self.test_set))
         return self.test_set[idx]
 
-if __name__ == '__main__':
-    interp_data(size=(512, 512))

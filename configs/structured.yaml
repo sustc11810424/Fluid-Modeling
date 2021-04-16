@@ -1,0 +1,9 @@
+method: structured
+model:
+  encoder: Enc
+  decoder: Dec
+data:
+  dir: data/official/npy
+training:
+  loss: 
+  - mse
