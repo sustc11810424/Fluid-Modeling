@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import os
 import numpy as np
 from torch.nn.utils import spectral_norm, weight_norm
-from mmcv.ops import ModulatedDeformConv2dPack
+# from mmcv.ops import ModulatedDeformConv2dPack
 
 class ResNeXt(nn.Module):
     def __init__(self, dim, cardinality, conv=nn.Conv2d):

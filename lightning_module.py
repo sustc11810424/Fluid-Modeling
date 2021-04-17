@@ -82,7 +82,7 @@ class EncoderDecoder(pl.LightningModule):
     def __init__(self, cfg):
         super().__init__()
         self.cfg = cfg
-        self.lr = cfg.get('learning_rate')
+        
         self.encoder = config.get_model(cfg['model']['encoder'])
         self.decoder = config.get_model(cfg['model']['decoder'])
         self.loss_fuc = config.get_loss(cfg)

@@ -1,7 +1,17 @@
-method: structured
 model:
-  encoder: Enc
-  decoder: Dec
+  encoder: 
+    method: structured
+    model: NaiveEnc
+    kwargs:
+      geo_dim: 2
+      param_dim: 2
+      laten_dim: 32
+  decoder: 
+    method: structured
+    model: CNNDecoder
+    kwargs:
+      in_channels: 32
+      out_channels: 3
 data:
   dir: data/official/npy
 training:
